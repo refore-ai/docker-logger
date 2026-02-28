@@ -15,8 +15,8 @@ github.com/docker/go-units v0.5.0 h1:69rxXcBk27SvSaaxTtLh/8llcHD8vYHT7WSdRZ/jvr4
 github.com/docker/go-units v0.5.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
 github.com/fsouza/go-dockerclient v1.13.0 h1:i6VWBKrFprrqDDK6rEYw0Zp5KsN+cVlqZ/ODaIX2erM=
 github.com/fsouza/go-dockerclient v1.13.0/go.mod h1:slZeNd4OpH+YfOrTc4+fkjtq8fwKymehRReLvUVFfpI=
-github.com/go-pkgz/lgr v0.12.1 h1:8GVfG2rSARq3Eaj5PP158rtBR2LHVGkwioIkQBGbvKg=
-github.com/go-pkgz/lgr v0.12.1/go.mod h1:A4AxjOthFVFK6jRnVYMeusno5SeDAxcLVHd0kI/lN/Y=
+github.com/go-pkgz/lgr v0.12.2 h1:EZ5NNdJuXdi4Yt3Yz1jcaRGVQYEG5j9vGgd7BYTiKbw=
+github.com/go-pkgz/lgr v0.12.2/go.mod h1:lpCDgVvCIxBHZp8+sGCj9MPctIzKZyZ3QdE19ddqd54=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/hashicorp/errwrap v1.0.0/go.mod h1:YH+1FKiLXxHSkmPseP+kNlulaMuP3n2brvKWEqk/Jc4=

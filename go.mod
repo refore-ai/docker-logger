@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/fsouza/go-dockerclient v1.13.0
-	github.com/go-pkgz/lgr v0.12.1
+	github.com/go-pkgz/lgr v0.12.2
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/pkg/errors v0.9.1

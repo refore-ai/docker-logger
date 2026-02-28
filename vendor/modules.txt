@@ -21,7 +21,7 @@ github.com/docker/go-units
 # github.com/fsouza/go-dockerclient v1.13.0
 ## explicit; go 1.25.0
 github.com/fsouza/go-dockerclient
-# github.com/go-pkgz/lgr v0.12.1
+# github.com/go-pkgz/lgr v0.12.2
 ## explicit; go 1.21
 github.com/go-pkgz/lgr
 # github.com/hashicorp/errwrap v1.1.0
