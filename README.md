@@ -1,3 +1,7 @@
+# What’s New vs. Original
+
+Compared to the original version, the ability to prepend timestamps to error logs has been added (if the logs themselves do not already contain them)
+
 # docker-logger [![Go Report Card](https://goreportcard.com/badge/github.com/umputun/docker-logger)](https://goreportcard.com/report/github.com/umputun/docker-logger) [![Docker Hub](https://img.shields.io/docker/pulls/umputun/docker-logger.svg)](https://hub.docker.com/r/umputun/docker-logger/)
 
 
