@@ -34,6 +34,13 @@ type cliOpts struct {
 	MixErr        bool   `long:"mix-err" env:"MIX_ERR" description:"send error to std output log file"`
 	FilesLocation string `long:"loc" env:"LOG_FILES_LOC" default:"logs" description:"log files locations"`
 
+	// ErrTimestamps opt-in prepends a leading timestamp to every .err log
+	// line. Off by default so that existing consumers of the .err byte
+	// stream are not silently changed on upgrade. Auto-disabled when the
+	// .err stream is already timestamped elsewhere (--json adds a ts field
+	// and --mix-err routes stderr into the .log file).
+	ErrTimestamps bool `long:"err-timestamps" env:"ERR_TIMESTAMPS" description:"prepend a leading timestamp (nginx-style, millisecond precision) to every .err log line"`
+
 	Excludes        []string `short:"x" long:"exclude" env:"EXCLUDE" env-delim:"," description:"excluded container names"`
 	Includes        []string `short:"i" long:"include" env:"INCLUDE" env-delim:"," description:"included container names"`
 	IncludesPattern string   `short:"p" long:"include-pattern" env:"INCLUDE_PATTERN" env-delim:"," description:"included container names regex pattern"`
@@ -240,7 +247,7 @@ func makeLogWriters(opts *cliOpts, containerName, group string) (logWriter, errW
 		}
 
 		// use std writer for errors by default
-		errFileWriter := logFileWriter
+		var errFileWriter io.WriteCloser = logFileWriter
 		errFname := logName
 
 		if !opts.MixErr { // if writers not mixed make error writer
@@ -254,10 +261,28 @@ func makeLogWriters(opts *cliOpts, containerName, group string) (logWriter, errW
 			}
 		}
 
+		// optionally wrap the err file writer with a timestamp prefixer.
+		// The .log stream is expected to be JSON with its own timestamp and
+		// is never wrapped; the .err stream is typically free-form text
+		// from crashes, panics, nginx, etc. which benefits from a
+		// deterministic leading timestamp when the user opts in.
+		// Auto-disable when the .err stream is already timestamped or
+		// redirected:
+		//   - --json wraps each record in an envelope that already carries
+		//     a ts field, so adding another would be noise.
+		//   - --mix-err merges stderr into the .log file; timestamping is
+		//     handled by the .log path (or lack thereof), not here.
+		// Syslog is not affected because it has its own timestamps and is
+		// attached separately below.
+		wrapTS := opts.ErrTimestamps && !opts.ExtJSON && !opts.MixErr
+		if wrapTS {
+			errFileWriter = logger.NewTimestampedWriter(errFileWriter)
+		}
+
 		logWriters = append(logWriters, logFileWriter)
 		errWriters = append(errWriters, errFileWriter)
-		log.Printf("[INFO] loggers created for %s and %s, max.size=%dM, max.files=%d, max.days=%d",
-			logName, errFname, opts.MaxFileSize, opts.MaxFilesCount, opts.MaxFilesAge)
+		log.Printf("[INFO] loggers created for %s and %s, max.size=%dM, max.files=%d, max.days=%d, err.timestamps=%v",
+			logName, errFname, opts.MaxFileSize, opts.MaxFilesCount, opts.MaxFilesAge, wrapTS)
 	}
 
 	if opts.EnableSyslog && syslog.IsSupported() {
