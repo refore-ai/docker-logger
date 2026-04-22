@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -395,7 +397,9 @@ func Test_makeLogWriters(t *testing.T) {
 	tmpDir := t.TempDir()
 	setupLog(true)
 
-	opts := cliOpts{FilesLocation: tmpDir, EnableFiles: true, MaxFileSize: 1, MaxFilesCount: 10}
+	// NoTimestamps:true keeps the existing raw-bytes assertions below valid.
+	// The default behaviour (timestamps on) is covered by Test_makeLogWritersErrTimestamps.
+	opts := cliOpts{FilesLocation: tmpDir, EnableFiles: true, MaxFileSize: 1, MaxFilesCount: 10, NoTimestamps: true}
 	stdWr, errWr, err := makeLogWriters(&opts, "container1", "gr1")
 	require.NoError(t, err)
 	assert.NotEqual(t, stdWr, errWr, "different writers for out and err")
@@ -419,6 +423,52 @@ func Test_makeLogWriters(t *testing.T) {
 	r, err = os.ReadFile(errFile) //nolint:gosec // test file path
 	require.NoError(t, err)
 	assert.Equal(t, "err line 1\nxxx123 line 2\n", string(r))
+
+	assert.NoError(t, stdWr.Close())
+	assert.NoError(t, errWr.Close())
+}
+
+func Test_makeLogWritersErrTimestamps(t *testing.T) {
+	tmpDir := t.TempDir()
+	opts := cliOpts{
+		FilesLocation: tmpDir, EnableFiles: true, MaxFileSize: 1, MaxFilesCount: 10,
+		NoTimestamps: false, TimestampFmt: "2006/01/02 15:04:05.000",
+	}
+	stdWr, errWr, err := makeLogWriters(&opts, "container1", "gr1")
+	require.NoError(t, err)
+
+	// .log is expected to be JSON already, must NOT be rewritten
+	_, err = stdWr.Write([]byte(`{"level":"info","msg":"hi"}` + "\n"))
+	require.NoError(t, err)
+
+	// stderr lines: one with no timestamp, one that already starts with a
+	// nginx-style timestamp. The former must be prefixed, the latter must pass
+	// through untouched.
+	_, err = errWr.Write([]byte("bare error line\n"))
+	require.NoError(t, err)
+	_, err = errWr.Write([]byte("2025/03/14 15:37:20 [emerg] nginx error\n"))
+	require.NoError(t, err)
+
+	// .log stays raw
+	logFile := filepath.Join(tmpDir, "gr1", "container1.log")
+	r, err := os.ReadFile(logFile) //nolint:gosec // test file path
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"level":"info","msg":"hi"}`, strings.TrimRight(string(r), "\n"),
+		".log must not be modified by the timestamp wrapper")
+
+	// .err must have exactly one leading timestamp per line
+	errFile := filepath.Join(tmpDir, "gr1", "container1.err")
+	r, err = os.ReadFile(errFile) //nolint:gosec // test file path
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimRight(string(r), "\n"), "\n")
+	require.Len(t, lines, 2)
+
+	tsRE := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{3} `)
+	assert.Regexp(t, tsRE, lines[0], "bare line should get a ts prefix")
+	assert.True(t, strings.HasSuffix(lines[0], " bare error line"), "line %q", lines[0])
+
+	assert.Equal(t, "2025/03/14 15:37:20 [emerg] nginx error", lines[1],
+		"already-timestamped line must be untouched (no double ts)")
 
 	assert.NoError(t, stdWr.Close())
 	assert.NoError(t, errWr.Close())

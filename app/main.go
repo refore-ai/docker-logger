@@ -34,6 +34,12 @@ type cliOpts struct {
 	MixErr        bool   `long:"mix-err" env:"MIX_ERR" description:"send error to std output log file"`
 	FilesLocation string `long:"loc" env:"LOG_FILES_LOC" default:"logs" description:"log files locations"`
 
+	// NOTE: go-flags forbids `default:"true"` on bool fields (they always
+	// default to false). To keep "timestamps on by default" semantics we
+	// expose an inverted opt-out flag instead.
+	NoTimestamps bool   `long:"no-timestamps" env:"NO_TIMESTAMPS" description:"disable the leading timestamp that is prepended to every .err log line lacking one"`
+	TimestampFmt string `long:"ts-format" env:"TS_FORMAT" default:"2006/01/02 15:04:05.000" description:"go time layout used for err-log timestamps (nginx error.log style with millisecond precision)"`
+
 	Excludes        []string `short:"x" long:"exclude" env:"EXCLUDE" env-delim:"," description:"excluded container names"`
 	Includes        []string `short:"i" long:"include" env:"INCLUDE" env-delim:"," description:"included container names"`
 	IncludesPattern string   `short:"p" long:"include-pattern" env:"INCLUDE_PATTERN" env-delim:"," description:"included container names regex pattern"`
@@ -240,7 +246,7 @@ func makeLogWriters(opts *cliOpts, containerName, group string) (logWriter, errW
 		}
 
 		// use std writer for errors by default
-		errFileWriter := logFileWriter
+		var errFileWriter io.WriteCloser = logFileWriter
 		errFname := logName
 
 		if !opts.MixErr { // if writers not mixed make error writer
@@ -254,10 +260,23 @@ func makeLogWriters(opts *cliOpts, containerName, group string) (logWriter, errW
 			}
 		}
 
+		// wrap only the err writer with a timestamp prefixer. The .log stream
+		// is expected to be JSON and already carries its own timestamp; the
+		// .err stream is typically free-form text from crashes, panics, nginx,
+		// etc. which benefits from a deterministic leading timestamp.
+		// syslog is skipped on purpose - it has its own timestamping.
+		// with --json the MultiWriter itself adds a ts field, so we also skip
+		// wrapping to avoid ending up with two timestamps.
+		var errFile = errFileWriter
+		wrapTS := !opts.NoTimestamps && !opts.ExtJSON && !opts.MixErr
+		if wrapTS {
+			errFile = logger.NewTimestampedWriterWithFormat(errFileWriter, opts.TimestampFmt)
+		}
+
 		logWriters = append(logWriters, logFileWriter)
-		errWriters = append(errWriters, errFileWriter)
-		log.Printf("[INFO] loggers created for %s and %s, max.size=%dM, max.files=%d, max.days=%d",
-			logName, errFname, opts.MaxFileSize, opts.MaxFilesCount, opts.MaxFilesAge)
+		errWriters = append(errWriters, errFile)
+		log.Printf("[INFO] loggers created for %s and %s, max.size=%dM, max.files=%d, max.days=%d, err.timestamps=%v",
+			logName, errFname, opts.MaxFileSize, opts.MaxFilesCount, opts.MaxFilesAge, wrapTS)
 	}
 
 	if opts.EnableSyslog && syslog.IsSupported() {
