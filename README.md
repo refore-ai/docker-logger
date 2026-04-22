@@ -33,6 +33,7 @@ All changes can be done via container's environment in `docker-compose.yml` or w
 | `--loc`             | `LOG_FILES_LOC`   | logs                        | log files location                            |
 | `--syslog-prefix`   | `SYSLOG_PREFIX`   | docker/                     | syslog prefix                                 |
 | `--json`, `-j`      | `JSON`            | false                       | output formatted as JSON                      |
+| `--err-timestamps`  | `ERR_TIMESTAMPS`  | false                       | prepend a nginx-style timestamp (`YYYY/MM/DD HH:MM:SS.mmm`) to every `.err` log line. Opt-in. Auto-disabled when `--json` or `--mix-err` is set. |
 | `--dbg`             | `DEBUG`           | false                       | debug mode                                    |
 
 

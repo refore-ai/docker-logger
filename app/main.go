@@ -34,11 +34,12 @@ type cliOpts struct {
 	MixErr        bool   `long:"mix-err" env:"MIX_ERR" description:"send error to std output log file"`
 	FilesLocation string `long:"loc" env:"LOG_FILES_LOC" default:"logs" description:"log files locations"`
 
-	// NOTE: go-flags forbids `default:"true"` on bool fields (they always
-	// default to false). To keep "timestamps on by default" semantics we
-	// expose an inverted opt-out flag instead.
-	NoTimestamps bool   `long:"no-timestamps" env:"NO_TIMESTAMPS" description:"disable the leading timestamp that is prepended to every .err log line lacking one"`
-	TimestampFmt string `long:"ts-format" env:"TS_FORMAT" default:"2006/01/02 15:04:05.000" description:"go time layout used for err-log timestamps (nginx error.log style with millisecond precision)"`
+	// ErrTimestamps opt-in prepends a leading timestamp to every .err log
+	// line. Off by default so that existing consumers of the .err byte
+	// stream are not silently changed on upgrade. Auto-disabled when the
+	// .err stream is already timestamped elsewhere (--json adds a ts field
+	// and --mix-err routes stderr into the .log file).
+	ErrTimestamps bool `long:"err-timestamps" env:"ERR_TIMESTAMPS" description:"prepend a leading timestamp (nginx-style, millisecond precision) to every .err log line"`
 
 	Excludes        []string `short:"x" long:"exclude" env:"EXCLUDE" env-delim:"," description:"excluded container names"`
 	Includes        []string `short:"i" long:"include" env:"INCLUDE" env-delim:"," description:"included container names"`
@@ -260,21 +261,26 @@ func makeLogWriters(opts *cliOpts, containerName, group string) (logWriter, errW
 			}
 		}
 
-		// wrap only the err writer with a timestamp prefixer. The .log stream
-		// is expected to be JSON and already carries its own timestamp; the
-		// .err stream is typically free-form text from crashes, panics, nginx,
-		// etc. which benefits from a deterministic leading timestamp.
-		// syslog is skipped on purpose - it has its own timestamping.
-		// with --json the MultiWriter itself adds a ts field, so we also skip
-		// wrapping to avoid ending up with two timestamps.
-		var errFile = errFileWriter
-		wrapTS := !opts.NoTimestamps && !opts.ExtJSON && !opts.MixErr
+		// optionally wrap the err file writer with a timestamp prefixer.
+		// The .log stream is expected to be JSON with its own timestamp and
+		// is never wrapped; the .err stream is typically free-form text
+		// from crashes, panics, nginx, etc. which benefits from a
+		// deterministic leading timestamp when the user opts in.
+		// Auto-disable when the .err stream is already timestamped or
+		// redirected:
+		//   - --json wraps each record in an envelope that already carries
+		//     a ts field, so adding another would be noise.
+		//   - --mix-err merges stderr into the .log file; timestamping is
+		//     handled by the .log path (or lack thereof), not here.
+		// Syslog is not affected because it has its own timestamps and is
+		// attached separately below.
+		wrapTS := opts.ErrTimestamps && !opts.ExtJSON && !opts.MixErr
 		if wrapTS {
-			errFile = logger.NewTimestampedWriterWithFormat(errFileWriter, opts.TimestampFmt)
+			errFileWriter = logger.NewTimestampedWriter(errFileWriter)
 		}
 
 		logWriters = append(logWriters, logFileWriter)
-		errWriters = append(errWriters, errFile)
+		errWriters = append(errWriters, errFileWriter)
 		log.Printf("[INFO] loggers created for %s and %s, max.size=%dM, max.files=%d, max.days=%d, err.timestamps=%v",
 			logName, errFname, opts.MaxFileSize, opts.MaxFilesCount, opts.MaxFilesAge, wrapTS)
 	}

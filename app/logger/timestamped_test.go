@@ -82,71 +82,21 @@ func TestTimestampedWriter_EmptyWrite(t *testing.T) {
 	assert.Empty(t, buf.String())
 }
 
-func TestTimestampedWriter_DetectsExistingTimestamps(t *testing.T) {
-	cases := map[string]string{
-		"nginx error":                 "2025/03/14 15:37:20 [emerg] 7#7: host not found\n",
-		"ISO space":                   "2025-03-14 15:37:20 some application log\n",
-		"ISO 8601 with T":             "2025-03-14T15:37:20 app log\n",
-		"RFC3339 with Z":              "2025-03-14T15:37:20.123Z java spring\n",
-		"RFC3339 with offset":         "2025-03-14T15:37:20+08:00 event\n",
-		"bracketed ISO":               "[2025-03-14T15:37:20,123] elasticsearch INFO foo\n",
-		"bracketed date":              "[2025-03-14 15:37:20] log4j WARN bar\n",
-		"Apache common":               "14/Mar/2025:15:37:20 +0000 GET /\n",
-		"bracketed Apache":            "[14/Mar/2025:15:37:20 +0000] GET /\n",
-		"leading whitespace + nginx":  "  2025/03/14 15:37:20 indented\n",
-	}
-
-	for name, line := range cases {
-		t.Run(name, func(t *testing.T) {
-			buf := &wrMock{}
-			w := newTW(buf)
-			_, err := w.Write([]byte(line))
-			require.NoError(t, err)
-			assert.Equal(t, line, buf.String(), "line should be passed through unchanged")
-		})
-	}
-}
-
-func TestTimestampedWriter_MixedDetectedAndPlainLines(t *testing.T) {
+// TestTimestampedWriter_AlwaysPrependsEvenIfAlreadyTimestamped documents the
+// deliberate choice: the writer does not try to detect pre-existing
+// timestamps. Callers opt in knowing their stream needs a prefix; double
+// timestamps on streams that already carry one are expected and preferred
+// over the silent false-negatives a detector would produce for logfmt,
+// syslog-style dates, RFC3339Nano, JSON with embedded "timestamp" fields,
+// etc.
+func TestTimestampedWriter_AlwaysPrependsEvenIfAlreadyTimestamped(t *testing.T) {
 	buf := &wrMock{}
 	w := newTW(buf)
 
-	input := "2025/03/14 15:37:20 nginx already has ts\n" +
-		"plain error without timestamp\n" +
-		"2025-03-14T15:37:20Z another ts\n"
-	_, err := w.Write([]byte(input))
+	line := "2025/03/14 15:37:20 [emerg] 7#7: host not found\n"
+	_, err := w.Write([]byte(line))
 	require.NoError(t, err)
-
-	expected := "2025/03/14 15:37:20 nginx already has ts\n" +
-		"2026/04/22 10:30:45.123 plain error without timestamp\n" +
-		"2025-03-14T15:37:20Z another ts\n"
-	assert.Equal(t, expected, buf.String())
-}
-
-func TestTimestampedWriter_DoesNotDetectBogusPatterns(t *testing.T) {
-	buf := &wrMock{}
-	w := newTW(buf)
-
-	// looks a bit like a date but is not a timestamp prefix
-	_, err := w.Write([]byte("version 1.2.3 2025\n"))
-	require.NoError(t, err)
-	assert.Equal(t, "2026/04/22 10:30:45.123 version 1.2.3 2025\n", buf.String())
-}
-
-func TestTimestampedWriter_CustomFormat(t *testing.T) {
-	buf := &wrMock{}
-	w := NewTimestampedWriterWithFormat(buf, "2006-01-02 15:04:05.000")
-	w.nowFn = fixedNow
-
-	_, err := w.Write([]byte("msg\n"))
-	require.NoError(t, err)
-	assert.Equal(t, "2026-04-22 10:30:45.123 msg\n", buf.String())
-}
-
-func TestTimestampedWriter_EmptyFormatFallsBackToDefault(t *testing.T) {
-	buf := &wrMock{}
-	w := NewTimestampedWriterWithFormat(buf, "")
-	assert.Equal(t, DefaultTimestampFormat, w.format)
+	assert.Equal(t, "2026/04/22 10:30:45.123 "+line, buf.String())
 }
 
 func TestTimestampedWriter_OversizedLineIsFlushed(t *testing.T) {
@@ -174,6 +124,16 @@ func TestTimestampedWriter_Close(t *testing.T) {
 		err := w.Close()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "close failed")
+	})
+
+	t.Run("flush error on close does not block close", func(t *testing.T) {
+		// a partial line remains in the buffer; the underlying Write fails
+		// but Close must still run and return the close error (nil here).
+		underlying := &errWriteCloser{writeErr: errors.New("write failed")}
+		w := NewTimestampedWriter(underlying)
+		_, err := w.Write([]byte("partial no newline"))
+		require.NoError(t, err, "write with no newline should not surface the downstream write error")
+		require.NoError(t, w.Close(), "close should not surface the flush error, just log it")
 	})
 }
 

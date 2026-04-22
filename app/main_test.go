@@ -397,9 +397,10 @@ func Test_makeLogWriters(t *testing.T) {
 	tmpDir := t.TempDir()
 	setupLog(true)
 
-	// NoTimestamps:true keeps the existing raw-bytes assertions below valid.
-	// The default behaviour (timestamps on) is covered by Test_makeLogWritersErrTimestamps.
-	opts := cliOpts{FilesLocation: tmpDir, EnableFiles: true, MaxFileSize: 1, MaxFilesCount: 10, NoTimestamps: true}
+	// ErrTimestamps defaults to false (opt-in), which keeps the raw-bytes
+	// assertions below valid. The opt-in path is covered by
+	// Test_makeLogWritersErrTimestamps.
+	opts := cliOpts{FilesLocation: tmpDir, EnableFiles: true, MaxFileSize: 1, MaxFilesCount: 10}
 	stdWr, errWr, err := makeLogWriters(&opts, "container1", "gr1")
 	require.NoError(t, err)
 	assert.NotEqual(t, stdWr, errWr, "different writers for out and err")
@@ -432,18 +433,18 @@ func Test_makeLogWritersErrTimestamps(t *testing.T) {
 	tmpDir := t.TempDir()
 	opts := cliOpts{
 		FilesLocation: tmpDir, EnableFiles: true, MaxFileSize: 1, MaxFilesCount: 10,
-		NoTimestamps: false, TimestampFmt: "2006/01/02 15:04:05.000",
+		ErrTimestamps: true,
 	}
 	stdWr, errWr, err := makeLogWriters(&opts, "container1", "gr1")
 	require.NoError(t, err)
 
-	// .log is expected to be JSON already, must NOT be rewritten
 	_, err = stdWr.Write([]byte(`{"level":"info","msg":"hi"}` + "\n"))
 	require.NoError(t, err)
 
-	// stderr lines: one with no timestamp, one that already starts with a
-	// nginx-style timestamp. The former must be prefixed, the latter must pass
-	// through untouched.
+	// every stderr line, regardless of whether it already looks timestamped,
+	// is deterministically prepended with a timestamp. This is intentional:
+	// see TestTimestampedWriter_AlwaysPrependsEvenIfAlreadyTimestamped for
+	// rationale.
 	_, err = errWr.Write([]byte("bare error line\n"))
 	require.NoError(t, err)
 	_, err = errWr.Write([]byte("2025/03/14 15:37:20 [emerg] nginx error\n"))
@@ -456,7 +457,6 @@ func Test_makeLogWritersErrTimestamps(t *testing.T) {
 	assert.JSONEq(t, `{"level":"info","msg":"hi"}`, strings.TrimRight(string(r), "\n"),
 		".log must not be modified by the timestamp wrapper")
 
-	// .err must have exactly one leading timestamp per line
 	errFile := filepath.Join(tmpDir, "gr1", "container1.err")
 	r, err = os.ReadFile(errFile) //nolint:gosec // test file path
 	require.NoError(t, err)
@@ -464,14 +464,76 @@ func Test_makeLogWritersErrTimestamps(t *testing.T) {
 	require.Len(t, lines, 2)
 
 	tsRE := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{3} `)
-	assert.Regexp(t, tsRE, lines[0], "bare line should get a ts prefix")
+	assert.Regexp(t, tsRE, lines[0])
 	assert.True(t, strings.HasSuffix(lines[0], " bare error line"), "line %q", lines[0])
 
-	assert.Equal(t, "2025/03/14 15:37:20 [emerg] nginx error", lines[1],
-		"already-timestamped line must be untouched (no double ts)")
+	assert.Regexp(t, tsRE, lines[1])
+	assert.True(t,
+		strings.HasSuffix(lines[1], " 2025/03/14 15:37:20 [emerg] nginx error"),
+		"line %q", lines[1])
 
 	assert.NoError(t, stdWr.Close())
 	assert.NoError(t, errWr.Close())
+}
+
+func Test_makeLogWritersErrTimestampsDisabledByJSON(t *testing.T) {
+	// --json wraps records in a JSON envelope that already carries its own
+	// timestamp, so the TimestampedWriter must NOT be wired in even when
+	// --err-timestamps is set.
+	tmpDir := t.TempDir()
+	opts := cliOpts{
+		FilesLocation: tmpDir, EnableFiles: true, MaxFileSize: 1, MaxFilesCount: 10,
+		ErrTimestamps: true, ExtJSON: true,
+	}
+	_, errWr, err := makeLogWriters(&opts, "container1", "gr1")
+	require.NoError(t, err)
+
+	_, err = errWr.Write([]byte("bare error line"))
+	require.NoError(t, err)
+	require.NoError(t, errWr.Close())
+
+	errFile := filepath.Join(tmpDir, "gr1", "container1.err")
+	r, err := os.ReadFile(errFile) //nolint:gosec // test file path
+	require.NoError(t, err)
+
+	// the MultiWriter JSON envelope owns timestamping; the raw line must NOT
+	// have been prefixed by TimestampedWriter.
+	assert.NotRegexp(t,
+		`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \{`,
+		string(r),
+		"--json output must not be wrapped with a raw leading timestamp")
+	assert.Contains(t, string(r), `"msg":"bare error line"`,
+		"err output should still be a JSON envelope from MultiWriter")
+}
+
+func Test_makeLogWritersErrTimestampsDisabledByMixErr(t *testing.T) {
+	// --mix-err routes stderr into the .log file. The TimestampedWriter must
+	// NOT be wired in, otherwise stderr lines inside .log would get a raw
+	// prefix the rest of .log does not have.
+	tmpDir := t.TempDir()
+	opts := cliOpts{
+		FilesLocation: tmpDir, EnableFiles: true, MaxFileSize: 1, MaxFilesCount: 10,
+		ErrTimestamps: true, MixErr: true,
+	}
+	stdWr, errWr, err := makeLogWriters(&opts, "container1", "gr1")
+	require.NoError(t, err)
+
+	_, err = stdWr.Write([]byte("stdout line\n"))
+	require.NoError(t, err)
+	_, err = errWr.Write([]byte("stderr line\n"))
+	require.NoError(t, err)
+
+	// no .err file is created in mix mode
+	_, err = os.Stat(filepath.Join(tmpDir, "gr1", "container1.err"))
+	assert.True(t, os.IsNotExist(err), ".err file should not exist in MixErr mode")
+
+	logFile := filepath.Join(tmpDir, "gr1", "container1.log")
+	r, err := os.ReadFile(logFile) //nolint:gosec // test file path
+	require.NoError(t, err)
+	assert.Equal(t, "stdout line\nstderr line\n", string(r),
+		"mix-err must merge stderr into .log verbatim, without a leading timestamp")
+
+	assert.NoError(t, stdWr.Close())
 }
 
 func Test_makeLogWritersMixed(t *testing.T) {
